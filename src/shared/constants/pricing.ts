@@ -528,6 +528,16 @@ export const DEFAULT_PRICING = {
     "qwen/qwen3-32b": { input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0 },
   },
 
+  // Blackbox AI
+  blackbox: {
+    "gpt-4o": { input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0 },
+    "gemini-2.5-flash": { input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0 },
+    "claude-sonnet-4": { input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0 },
+    "deepseek-v3": { input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0 },
+    blackboxai: { input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0 },
+    "blackboxai-pro": { input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0 },
+  },
+
   // Fireworks
   fireworks: {
     "accounts/fireworks/models/gpt-oss-120b": {
@@ -734,19 +744,34 @@ export const DEFAULT_PRICING = {
   },
 };
 
+type ProviderPricingTable = Record<string, Record<string, unknown>>;
+type PricingRow = {
+  input: number;
+  output: number;
+  cached?: number;
+  reasoning?: number;
+  cache_creation?: number;
+};
+type TokenUsage = Record<string, number | undefined>;
+
 /**
  * Get pricing for a specific provider and model
  * @param {string} provider - Provider ID (e.g., "openai", "cc", "gc")
  * @param {string} model - Model ID
  * @returns {object|null} Pricing object or null if not found
  */
-export function getPricingForModel(provider, model) {
+export function getPricingForModel(
+  provider: string,
+  model: string
+): Record<string, unknown> | null {
   if (!provider || !model) return null;
 
-  const providerPricing = DEFAULT_PRICING[provider];
+  const providerPricing = (DEFAULT_PRICING as ProviderPricingTable)[provider];
   if (!providerPricing) return null;
 
-  return providerPricing[model] || null;
+  const modelPricing = providerPricing[model];
+  if (!modelPricing || typeof modelPricing !== "object") return null;
+  return modelPricing as Record<string, unknown>;
 }
 
 /**
@@ -762,7 +787,7 @@ export function getDefaultPricing() {
  * @param {number} cost - Cost in dollars
  * @returns {string} Formatted cost string
  */
-export function formatCost(cost) {
+export function formatCost(cost: number | null | undefined): string {
   if (cost === null || cost === undefined || isNaN(cost)) return "$0.00";
   return `$${cost.toFixed(2)}`;
 }
@@ -773,7 +798,10 @@ export function formatCost(cost) {
  * @param {object} pricing - Pricing object
  * @returns {number} Cost in dollars
  */
-export function calculateCostFromTokens(tokens, pricing) {
+export function calculateCostFromTokens(
+  tokens: TokenUsage | null | undefined,
+  pricing: PricingRow | null | undefined
+): number {
   if (!tokens || !pricing) return 0;
 
   let cost = 0;

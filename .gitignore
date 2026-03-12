@@ -21,11 +21,12 @@ coverage/
 /build
 /app
 cloud/*
-
+/.idea/*
+/.vscode/*
 # misc
 .DS_Store
 *.pem
-
+/docs/*
 # debug
 npm-debug.log*
 yarn-debug.log*

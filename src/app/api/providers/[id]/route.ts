@@ -7,6 +7,8 @@ import {
 } from "@/models";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { syncToCloud } from "@/lib/cloudSync";
+import { updateProviderConnectionSchema } from "@/shared/validation/schemas";
+import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
 // GET /api/providers/[id] - Get single connection
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -34,9 +36,28 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
 // PUT /api/providers/[id] - Update connection
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  let rawBody;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return NextResponse.json(
+      {
+        error: {
+          message: "Invalid request",
+          details: [{ field: "body", message: "Invalid JSON body" }],
+        },
+      },
+      { status: 400 }
+    );
+  }
+
   try {
     const { id } = await params;
-    const body = await request.json();
+    const validation = validateBody(updateProviderConnectionSchema, rawBody);
+    if (isValidationFailure(validation)) {
+      return NextResponse.json({ error: validation.error }, { status: 400 });
+    }
+    const body = validation.data;
     const {
       name,
       priority,
@@ -53,6 +74,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       rateLimitedUntil,
       lastTested,
       healthCheckInterval,
+      providerSpecificData: incomingPsd,
     } = body;
 
     const existing = await getProviderConnectionById(id);
@@ -76,6 +98,15 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     if (rateLimitedUntil !== undefined) updateData.rateLimitedUntil = rateLimitedUntil;
     if (lastTested !== undefined) updateData.lastTested = lastTested;
     if (healthCheckInterval !== undefined) updateData.healthCheckInterval = healthCheckInterval;
+
+    // Merge providerSpecificData (partial update — preserve existing keys not sent by caller)
+    if (incomingPsd !== undefined && incomingPsd !== null && typeof incomingPsd === "object") {
+      const existingPsd =
+        existing.providerSpecificData && typeof existing.providerSpecificData === "object"
+          ? existing.providerSpecificData
+          : {};
+      updateData.providerSpecificData = { ...existingPsd, ...incomingPsd };
+    }
 
     const updated = await updateProviderConnection(id, updateData);
 

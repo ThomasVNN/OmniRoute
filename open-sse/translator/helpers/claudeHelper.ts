@@ -126,6 +126,25 @@ export function prepareClaudeRequest(body, provider = null) {
       }
     }
 
+    // Pass 1.4: Filter out tool_use blocks with empty names (causes Claude 400 error)
+    // Apply to ALL roles (assistant tool_use + any user messages that may carry tool_use)
+    // Also filter tool_result blocks with missing tool_use_id
+    for (const msg of filtered) {
+      if (Array.isArray(msg.content)) {
+        msg.content = msg.content.filter(
+          (block) => block.type !== "tool_use" || (block.name && block.name?.trim())
+        );
+        msg.content = msg.content.filter(
+          (block) => block.type !== "tool_result" || block.tool_use_id
+        );
+      }
+    }
+
+    // Also filter top-level tool declarations with empty names
+    if (body.tools && Array.isArray(body.tools)) {
+      body.tools = body.tools.filter((tool) => tool.name && tool.name?.trim());
+    }
+
     // Pass 1.5: Fix tool_use/tool_result ordering
     // Each tool_use must have tool_result in the NEXT message (not same message with other content)
     filtered = fixToolUseOrdering(filtered);
@@ -176,15 +195,19 @@ export function prepareClaudeRequest(body, provider = null) {
     }
   }
 
-  // 3. Tools: remove all cache_control, add only to last tool with ttl 1h
+  // 3. Tools: remove all cache_control, add only to last non-deferred tool with ttl 1h
+  // Tools with defer_loading=true cannot have cache_control (API rejects it)
   if (body.tools && Array.isArray(body.tools)) {
-    body.tools = body.tools.map((tool, i) => {
+    body.tools = body.tools.map((tool) => {
       const { cache_control, ...rest } = tool;
-      if (i === body.tools.length - 1) {
-        return { ...rest, cache_control: { type: "ephemeral", ttl: "1h" } };
-      }
       return rest;
     });
+    for (let i = body.tools.length - 1; i >= 0; i--) {
+      if (!body.tools[i].defer_loading) {
+        body.tools[i].cache_control = { type: "ephemeral", ttl: "1h" };
+        break;
+      }
+    }
   }
 
   return body;

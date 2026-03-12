@@ -5,8 +5,23 @@ import fs from "fs/promises";
 import path from "path";
 import { ensureCliConfigWriteAllowed, getCliConfigPaths } from "@/shared/services/cliRuntime";
 import { resolveDataDir } from "@/lib/dataPaths";
+import { codexProfileIdSchema, codexProfileNameSchema } from "@/shared/validation/schemas";
+import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
 const PROFILES_DIR = path.join(resolveDataDir(), "codex-profiles");
+
+/**
+ * Resolve a path inside PROFILES_DIR and verify it stays within bounds.
+ * Throws on path traversal attempts.
+ */
+function safeProfilePath(...segments: string[]): string {
+  const resolved = path.resolve(PROFILES_DIR, ...segments);
+  const base = path.resolve(PROFILES_DIR);
+  if (resolved !== base && !resolved.startsWith(base + path.sep)) {
+    throw new Error("Invalid path: directory traversal detected");
+  }
+  return resolved;
+}
 
 /**
  * Ensure profiles directory exists
@@ -79,17 +94,32 @@ export async function GET() {
 
 // POST - Save current config as a named profile
 export async function POST(request) {
+  let rawBody;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return NextResponse.json(
+      {
+        error: {
+          message: "Invalid request",
+          details: [{ field: "body", message: "Invalid JSON body" }],
+        },
+      },
+      { status: 400 }
+    );
+  }
+
   try {
     const writeGuard = ensureCliConfigWriteAllowed();
     if (writeGuard) {
       return NextResponse.json({ error: writeGuard }, { status: 403 });
     }
 
-    const { name } = await request.json();
-
-    if (!name || typeof name !== "string" || !name.trim()) {
-      return NextResponse.json({ error: "Profile name is required" }, { status: 400 });
+    const validation = validateBody(codexProfileNameSchema, rawBody);
+    if (isValidationFailure(validation)) {
+      return NextResponse.json({ error: validation.error }, { status: 400 });
     }
+    const { name } = validation.data;
 
     const paths = getCliConfigPaths("codex");
     if (!paths) {
@@ -150,17 +180,32 @@ export async function POST(request) {
 
 // PUT - Activate a saved profile (restore its config + auth)
 export async function PUT(request) {
+  let rawBody;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return NextResponse.json(
+      {
+        error: {
+          message: "Invalid request",
+          details: [{ field: "body", message: "Invalid JSON body" }],
+        },
+      },
+      { status: 400 }
+    );
+  }
+
   try {
     const writeGuard = ensureCliConfigWriteAllowed();
     if (writeGuard) {
       return NextResponse.json({ error: writeGuard }, { status: 403 });
     }
 
-    const { profileId } = await request.json();
-
-    if (!profileId) {
-      return NextResponse.json({ error: "profileId is required" }, { status: 400 });
+    const validation = validateBody(codexProfileIdSchema, rawBody);
+    if (isValidationFailure(validation)) {
+      return NextResponse.json({ error: validation.error }, { status: 400 });
     }
+    const { profileId } = validation.data;
 
     const profilePath = path.join(PROFILES_DIR, `${profileId}.json`);
     let profile;
@@ -206,12 +251,27 @@ export async function PUT(request) {
 
 // DELETE - Remove a saved profile
 export async function DELETE(request) {
+  let rawBody;
   try {
-    const { profileId } = await request.json();
+    rawBody = await request.json();
+  } catch {
+    return NextResponse.json(
+      {
+        error: {
+          message: "Invalid request",
+          details: [{ field: "body", message: "Invalid JSON body" }],
+        },
+      },
+      { status: 400 }
+    );
+  }
 
-    if (!profileId) {
-      return NextResponse.json({ error: "profileId is required" }, { status: 400 });
+  try {
+    const validation = validateBody(codexProfileIdSchema, rawBody);
+    if (isValidationFailure(validation)) {
+      return NextResponse.json({ error: validation.error }, { status: 400 });
     }
+    const { profileId } = validation.data;
 
     const profilePath = path.join(PROFILES_DIR, `${profileId}.json`);
     try {

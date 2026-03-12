@@ -5,6 +5,8 @@ import { syncToCloud, fetchWithTimeout, CLOUD_URL } from "@/lib/cloudSync";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import { cloudSyncActionSchema } from "@/shared/validation/schemas";
+import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
 /**
  * GET /api/sync/cloud
@@ -58,9 +60,22 @@ export async function GET() {
  * Sync data with Cloud
  */
 export async function POST(request: any) {
+  let rawBody;
   try {
-    const body = await request.json();
-    const { action } = body;
+    rawBody = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: { message: "Invalid request", details: [{ field: "body", message: "Invalid JSON body" }] } },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const validation = validateBody(cloudSyncActionSchema, rawBody);
+    if (isValidationFailure(validation)) {
+      return NextResponse.json({ error: validation.error }, { status: 400 });
+    }
+    const { action } = validation.data;
 
     // Always get machineId from server, don't trust client
     const machineId = await getConsistentMachineId();
@@ -114,11 +129,15 @@ async function syncAndVerify(machineId: string, createdKey: any, existingKeys: a
     );
   }
 
+  // Build the cloud URL for the frontend to use
+  const cloudUrl = CLOUD_URL ? `${CLOUD_URL}/${machineId}` : null;
+
   // Step 2: Verify connection by pinging the cloud (with retry)
   const apiKey = createdKey || existingKeys[0]?.key;
   if (!apiKey) {
     return NextResponse.json({
       ...syncResult,
+      cloudUrl,
       verified: false,
       verifyError: "No API key available",
     });
@@ -146,6 +165,7 @@ async function syncAndVerify(machineId: string, createdKey: any, existingKeys: a
       if (pingResponse.ok) {
         return NextResponse.json({
           ...syncResult,
+          cloudUrl,
           verified: true,
         });
       }
@@ -163,6 +183,7 @@ async function syncAndVerify(machineId: string, createdKey: any, existingKeys: a
   // Sync succeeded but verify failed — still return success with warning
   return NextResponse.json({
     ...syncResult,
+    cloudUrl,
     verified: false,
     verifyError: lastVerifyError || "Verification failed after retries",
   });

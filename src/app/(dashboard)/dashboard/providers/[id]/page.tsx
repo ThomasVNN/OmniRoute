@@ -868,7 +868,7 @@ export default function ProviderDetailPage() {
                 : t("providerProxy")}
             </button>
           </div>
-          {!isCompatible && (
+          {!isCompatible ? (
             <Button
               size="sm"
               icon="add"
@@ -876,6 +876,12 @@ export default function ProviderDetailPage() {
             >
               {t("add")}
             </Button>
+          ) : (
+            connections.length === 0 && (
+              <Button size="sm" icon="add" onClick={() => setShowAddApiKeyModal(true)}>
+                {t("add")}
+              </Button>
+            )
           )}
         </div>
 
@@ -1335,11 +1341,18 @@ PassthroughModelRow.propTypes = {
 
 function CustomModelsSection({ providerId, providerAlias, copied, onCopy }) {
   const t = useTranslations("providers");
+  const notify = useNotificationStore();
   const [customModels, setCustomModels] = useState([]);
   const [newModelId, setNewModelId] = useState("");
   const [newModelName, setNewModelName] = useState("");
+  const [newApiFormat, setNewApiFormat] = useState("chat-completions");
+  const [newEndpoints, setNewEndpoints] = useState(["chat"]);
   const [adding, setAdding] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
+  const [editingApiFormat, setEditingApiFormat] = useState("chat-completions");
+  const [editingEndpoints, setEditingEndpoints] = useState<string[]>(["chat"]);
+  const [savingModelId, setSavingModelId] = useState<string | null>(null);
 
   const fetchCustomModels = useCallback(async () => {
     try {
@@ -1370,11 +1383,15 @@ function CustomModelsSection({ providerId, providerAlias, copied, onCopy }) {
           provider: providerId,
           modelId: newModelId.trim(),
           modelName: newModelName.trim() || undefined,
+          apiFormat: newApiFormat,
+          supportedEndpoints: newEndpoints,
         }),
       });
       if (res.ok) {
         setNewModelId("");
         setNewModelName("");
+        setNewApiFormat("chat-completions");
+        setNewEndpoints(["chat"]);
         await fetchCustomModels();
       }
     } catch (e) {
@@ -1398,6 +1415,61 @@ function CustomModelsSection({ providerId, providerAlias, copied, onCopy }) {
     }
   };
 
+  const beginEdit = (model) => {
+    setEditingModelId(model.id);
+    setEditingApiFormat(model.apiFormat || "chat-completions");
+    setEditingEndpoints(
+      Array.isArray(model.supportedEndpoints) && model.supportedEndpoints.length
+        ? model.supportedEndpoints
+        : ["chat"]
+    );
+  };
+
+  const cancelEdit = () => {
+    setEditingModelId(null);
+    setEditingApiFormat("chat-completions");
+    setEditingEndpoints(["chat"]);
+    setSavingModelId(null);
+  };
+
+  const saveEdit = async (modelId) => {
+    if (!editingModelId || editingModelId !== modelId) return;
+    if (!editingEndpoints.length) {
+      notify.error("Select at least one supported endpoint");
+      return;
+    }
+
+    setSavingModelId(modelId);
+    try {
+      const model = customModels.find((m) => m.id === modelId);
+      const res = await fetch("/api/provider-models", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: providerId,
+          modelId,
+          modelName: model?.name || modelId,
+          source: model?.source || "manual",
+          apiFormat: editingApiFormat,
+          supportedEndpoints: editingEndpoints,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to save model endpoint settings");
+      }
+
+      await fetchCustomModels();
+      notify.success("Saved model endpoint settings");
+      cancelEdit();
+    } catch (e) {
+      console.error("Failed to save custom model:", e);
+      notify.error("Failed to save model endpoint settings");
+    } finally {
+      setSavingModelId(null);
+    }
+  };
+
   return (
     <div className="mt-6 pt-6 border-t border-border">
       <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
@@ -1407,38 +1479,89 @@ function CustomModelsSection({ providerId, providerAlias, copied, onCopy }) {
       <p className="text-xs text-text-muted mb-3">{t("customModelsHint")}</p>
 
       {/* Add form */}
-      <div className="flex items-end gap-2 mb-3">
-        <div className="flex-1">
-          <label htmlFor="custom-model-id" className="text-xs text-text-muted mb-1 block">
-            {t("modelId")}
-          </label>
-          <input
-            id="custom-model-id"
-            type="text"
-            value={newModelId}
-            onChange={(e) => setNewModelId(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-            placeholder={t("customModelPlaceholder")}
-            className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
-          />
+      <div className="flex flex-col gap-3 mb-3">
+        <div className="flex items-end gap-2">
+          <div className="flex-1">
+            <label htmlFor="custom-model-id" className="text-xs text-text-muted mb-1 block">
+              {t("modelId")}
+            </label>
+            <input
+              id="custom-model-id"
+              type="text"
+              value={newModelId}
+              onChange={(e) => setNewModelId(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+              placeholder={t("customModelPlaceholder")}
+              className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
+            />
+          </div>
+          <div className="w-40">
+            <label htmlFor="custom-model-name" className="text-xs text-text-muted mb-1 block">
+              {t("displayName")}
+            </label>
+            <input
+              id="custom-model-name"
+              type="text"
+              value={newModelName}
+              onChange={(e) => setNewModelName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+              placeholder={t("optional")}
+              className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
+            />
+          </div>
+          <Button size="sm" icon="add" onClick={handleAdd} disabled={!newModelId.trim() || adding}>
+            {adding ? t("adding") : t("add")}
+          </Button>
         </div>
-        <div className="w-40">
-          <label htmlFor="custom-model-name" className="text-xs text-text-muted mb-1 block">
-            {t("displayName")}
-          </label>
-          <input
-            id="custom-model-name"
-            type="text"
-            value={newModelName}
-            onChange={(e) => setNewModelName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-            placeholder={t("optional")}
-            className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
-          />
+
+        {/* API Format + Supported Endpoints */}
+        <div className="flex items-end gap-4 flex-wrap">
+          <div className="w-48">
+            <label htmlFor="custom-api-format" className="text-xs text-text-muted mb-1 block">
+              API Format
+            </label>
+            <select
+              id="custom-api-format"
+              value={newApiFormat}
+              onChange={(e) => setNewApiFormat(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
+            >
+              <option value="chat-completions">Chat Completions</option>
+              <option value="responses">Responses API</option>
+            </select>
+          </div>
+          <div className="flex-1">
+            <span className="text-xs text-text-muted mb-1 block">Supported Endpoints</span>
+            <div className="flex items-center gap-3">
+              {["chat", "embeddings", "images", "audio"].map((ep) => (
+                <label
+                  key={ep}
+                  className="flex items-center gap-1.5 text-xs text-text-main cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={newEndpoints.includes(ep)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setNewEndpoints((prev) => [...prev, ep]);
+                      } else {
+                        setNewEndpoints((prev) => prev.filter((x) => x !== ep));
+                      }
+                    }}
+                    className="rounded border-border"
+                  />
+                  {ep === "chat"
+                    ? "💬 Chat"
+                    : ep === "embeddings"
+                      ? "📐 Embeddings"
+                      : ep === "images"
+                        ? "🖼️ Images"
+                        : "🔊 Audio"}
+                </label>
+              ))}
+            </div>
+          </div>
         </div>
-        <Button size="sm" icon="add" onClick={handleAdd} disabled={!newModelId.trim() || adding}>
-          {adding ? t("adding") : t("add")}
-        </Button>
       </div>
 
       {/* List */}
@@ -1457,7 +1580,7 @@ function CustomModelsSection({ providerId, providerAlias, copied, onCopy }) {
                 <span className="material-symbols-outlined text-base text-primary">tune</span>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{model.name || model.id}</p>
-                  <div className="flex items-center gap-1 mt-1">
+                  <div className="flex items-center gap-1 mt-1 flex-wrap">
                     <code className="text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded">
                       {fullModel}
                     </code>
@@ -1470,15 +1593,103 @@ function CustomModelsSection({ providerId, providerAlias, copied, onCopy }) {
                         {copied === copyKey ? "check" : "content_copy"}
                       </span>
                     </button>
+                    {model.apiFormat === "responses" && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 font-medium">
+                        Responses
+                      </span>
+                    )}
+                    {model.supportedEndpoints?.includes("embeddings") && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-400 font-medium">
+                        📐 Embed
+                      </span>
+                    )}
+                    {model.supportedEndpoints?.includes("images") && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-medium">
+                        🖼️ Images
+                      </span>
+                    )}
+                    {model.supportedEndpoints?.includes("audio") && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400 font-medium">
+                        🔊 Audio
+                      </span>
+                    )}
                   </div>
+
+                  {editingModelId === model.id && (
+                    <div className="mt-3 p-3 rounded-lg border border-border bg-sidebar/40">
+                      <div className="flex items-end gap-3 flex-wrap">
+                        <div className="w-44">
+                          <label className="text-xs text-text-muted mb-1 block">API Format</label>
+                          <select
+                            value={editingApiFormat}
+                            onChange={(e) => setEditingApiFormat(e.target.value)}
+                            className="w-full px-2.5 py-2 text-xs border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
+                          >
+                            <option value="chat-completions">Chat Completions</option>
+                            <option value="responses">Responses API</option>
+                          </select>
+                        </div>
+
+                        <div className="flex-1 min-w-[240px]">
+                          <span className="text-xs text-text-muted mb-1 block">Supported Endpoints</span>
+                          <div className="flex items-center gap-3 flex-wrap">
+                            {["chat", "embeddings", "images", "audio"].map((ep) => (
+                              <label key={ep} className="flex items-center gap-1.5 text-xs text-text-main cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={editingEndpoints.includes(ep)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setEditingEndpoints((prev) => (prev.includes(ep) ? prev : [...prev, ep]));
+                                    } else {
+                                      setEditingEndpoints((prev) => prev.filter((x) => x !== ep));
+                                    }
+                                  }}
+                                  className="rounded border-border"
+                                />
+                                {ep === "chat"
+                                  ? "💬 Chat"
+                                  : ep === "embeddings"
+                                    ? "📐 Embeddings"
+                                    : ep === "images"
+                                      ? "🖼️ Images"
+                                      : "🔊 Audio"}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => saveEdit(model.id)}
+                          disabled={savingModelId === model.id}
+                        >
+                          {savingModelId === model.id ? t("saving") : t("save")}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={cancelEdit}>
+                          {t("cancel")}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <button
-                  onClick={() => handleRemove(model.id)}
-                  className="p-1 hover:bg-red-50 rounded text-red-500"
-                  title={t("removeCustomModel")}
-                >
-                  <span className="material-symbols-outlined text-sm">delete</span>
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => beginEdit(model)}
+                    className="p-1 hover:bg-sidebar rounded text-text-muted hover:text-primary"
+                    title={t("edit")}
+                  >
+                    <span className="material-symbols-outlined text-sm">edit</span>
+                  </button>
+                  <button
+                    onClick={() => handleRemove(model.id)}
+                    className="p-1 hover:bg-red-50 rounded text-red-500"
+                    title={t("removeCustomModel")}
+                  >
+                    <span className="material-symbols-outlined text-sm">delete</span>
+                  </button>
+                </div>
               </div>
             );
           })}

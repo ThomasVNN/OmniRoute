@@ -2,13 +2,20 @@ import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/localDb";
 import { clearHealthCheckLogCache } from "@/lib/tokenHealthCheck";
 import bcrypt from "bcryptjs";
-import { updateSettingsSchema, validateBody } from "@/shared/validation/schemas";
 import { getRuntimePorts } from "@/lib/runtime/ports";
+import { updateSettingsSchema } from "@/shared/validation/settingsSchemas";
+import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
+import { setCliCompatProviders } from "../../../../open-sse/config/cliFingerprints";
 
 export async function GET() {
   try {
     const settings = await getSettings();
     const { password, ...safeSettings } = settings;
+
+    // Sync CLI fingerprint providers to runtime cache on load
+    if (settings.cliCompatProviders) {
+      setCliCompatProviders(settings.cliCompatProviders as string[]);
+    }
 
     const enableRequestLogs = process.env.ENABLE_REQUEST_LOGS === "true";
     const runtimePorts = getRuntimePorts();
@@ -23,7 +30,7 @@ export async function GET() {
     });
   } catch (error) {
     console.log("Error getting settings:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: "Failed to load settings" }, { status: 500 });
   }
 }
 
@@ -33,15 +40,15 @@ export async function PATCH(request) {
 
     // Zod validation
     const validation = validateBody(updateSettingsSchema, rawBody);
-    if (!validation.success) {
+    if (isValidationFailure(validation)) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
-    const body = validation.data;
+    const body: typeof validation.data & { password?: string } = { ...validation.data };
 
     // If updating password, hash it
     if (body.newPassword) {
       const settings = await getSettings();
-      const currentHash = settings.password;
+      const currentHash = typeof settings.password === "string" ? settings.password : "";
 
       // Verify current password if it exists
       if (currentHash) {
@@ -73,10 +80,15 @@ export async function PATCH(request) {
       clearHealthCheckLogCache();
     }
 
+    // Sync CLI fingerprint providers to runtime cache
+    if ("cliCompatProviders" in body) {
+      setCliCompatProviders(body.cliCompatProviders || []);
+    }
+
     const { password, ...safeSettings } = settings;
     return NextResponse.json(safeSettings);
   } catch (error) {
     console.log("Error updating settings:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: "Failed to update settings" }, { status: 500 });
   }
 }

@@ -12,6 +12,7 @@ import { addBufferToUsage, filterUsageForFormat, estimateUsage } from "../utils/
 import { refreshWithRetry } from "../services/tokenRefresh.ts";
 import { createRequestLogger } from "../utils/requestLogger.ts";
 import { getModelTargetFormat, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.ts";
+import { resolveModelAlias } from "../services/modelDeprecation.ts";
 import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.ts";
 import { HTTP_STATUS } from "../config/constants.ts";
 import { handleBypassRequest } from "../utils/bypassHandler.ts";
@@ -54,7 +55,6 @@ import { createProgressTransform, wantsProgress } from "../utils/progressTracker
  * @param {string} options.connectionId - Connection ID for usage tracking
  * @param {object} options.apiKeyInfo - API key metadata for usage attribution
  */
-/** @param {any} options */
 export async function handleChatCore({
   body,
   modelInfo,
@@ -106,8 +106,13 @@ export async function handleChatCore({
   // Detect source format and get target format
   // Model-specific targetFormat takes priority over provider default
 
+  // Apply custom model aliases (Settings → Model Aliases → Pattern→Target) before routing (#315)
+  // Custom aliases take priority over built-in and must be resolved here so the
+  // downstream getModelTargetFormat() lookup uses the correct, aliased model ID.
+  const resolvedModel = resolveModelAlias(model);
+
   const alias = PROVIDER_ID_TO_ALIAS[provider] || provider;
-  const modelTargetFormat = getModelTargetFormat(alias, model);
+  const modelTargetFormat = getModelTargetFormat(alias, resolvedModel);
   const targetFormat = modelTargetFormat || getTargetFormat(provider);
 
   // Default to false unless client explicitly sets stream: true (OpenAI spec compliant)
@@ -135,7 +140,7 @@ export async function handleChatCore({
   // Create request logger for this session: sourceFormat_targetFormat_model
   const reqLogger = await createRequestLogger(sourceFormat, targetFormat, model);
 
-  // 0. Log client raw request (before any conversion)
+  // 0. Log client raw request (before format conversion)
   if (clientRawRequest) {
     reqLogger.logClientRawRequest(
       clientRawRequest.endpoint,
@@ -152,11 +157,40 @@ export async function handleChatCore({
   // Translate request (pass reqLogger for intermediate logging)
   let translatedBody = body;
   try {
+    // Issue #199: Disable tool name prefix when routing Claude-format requests
+    // to non-Claude backends (prefix causes tool name mismatches)
+    const claudeProviders = ["claude", "anthropic"];
+    if (targetFormat === FORMATS.CLAUDE && !claudeProviders.includes(provider?.toLowerCase?.())) {
+      translatedBody = { ...translatedBody, _disableToolPrefix: true };
+    }
+
+    // ── #291: Strip empty name fields from messages/input items ──
+    // Upstream providers (OpenAI, Codex) reject name:"" with 400 errors.
+    // Clients like PocketPaw may forward empty name fields from assistant turns.
+    if (Array.isArray(body.messages)) {
+      body.messages = body.messages.map((msg: Record<string, unknown>) => {
+        if (msg.name === "") {
+          const { name: _n, ...rest } = msg;
+          return rest;
+        }
+        return msg;
+      });
+    }
+    if (Array.isArray(body.input)) {
+      body.input = body.input.map((item: Record<string, unknown>) => {
+        if (item.name === "") {
+          const { name: _n, ...rest } = item;
+          return rest;
+        }
+        return item;
+      });
+    }
+
     translatedBody = translateRequest(
       sourceFormat,
       targetFormat,
       model,
-      body,
+      translatedBody,
       stream,
       credentials,
       provider,
@@ -203,6 +237,7 @@ export async function handleChatCore({
   // Extract toolNameMap for response translation (Claude OAuth)
   const toolNameMap = translatedBody._toolNameMap;
   delete translatedBody._toolNameMap;
+  delete translatedBody._disableToolPrefix;
 
   // Update model in body
   translatedBody.model = model;
@@ -283,6 +318,7 @@ export async function handleChatCore({
       comboName,
       apiKeyId: apiKeyInfo?.id || null,
       apiKeyName: apiKeyInfo?.name || null,
+      noLog: apiKeyInfo?.noLog === true,
     }).catch(() => {});
     if (error.name === "AbortError") {
       streamController.handleError(error);
@@ -298,11 +334,14 @@ export async function handleChatCore({
     providerResponse.status === HTTP_STATUS.UNAUTHORIZED ||
     providerResponse.status === HTTP_STATUS.FORBIDDEN
   ) {
-    const newCredentials = await refreshWithRetry(
+    const newCredentials = (await refreshWithRetry(
       () => executor.refreshCredentials(credentials, log),
       3,
       log
-    );
+    )) as null | {
+      accessToken?: string;
+      copilotToken?: string;
+    };
 
     if (newCredentials?.accessToken || newCredentials?.copilotToken) {
       log?.info?.("TOKEN", `${provider.toUpperCase()} | refreshed`);
@@ -363,6 +402,7 @@ export async function handleChatCore({
       comboName,
       apiKeyId: apiKeyInfo?.id || null,
       apiKeyName: apiKeyInfo?.name || null,
+      noLog: apiKeyInfo?.noLog === true,
     }).catch(() => {});
     const errMsg = formatProviderError(new Error(message), provider, model, statusCode);
     console.log(`${COLORS.red}[ERROR] ${errMsg}${COLORS.reset}`);
@@ -454,6 +494,7 @@ export async function handleChatCore({
       comboName,
       apiKeyId: apiKeyInfo?.id || null,
       apiKeyName: apiKeyInfo?.name || null,
+      noLog: apiKeyInfo?.noLog === true,
     }).catch(() => {});
     if (usage && typeof usage === "object") {
       const msg = `[${new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" })}] 📊 [USAGE] ${provider.toUpperCase()} | in=${usage?.prompt_tokens || 0} | out=${usage?.completion_tokens || 0}${connectionId ? ` | account=${connectionId.slice(0, 8)}...` : ""}`;
@@ -489,7 +530,7 @@ export async function handleChatCore({
       const buffered = addBufferToUsage(translatedResponse.usage);
       translatedResponse.usage = filterUsageForFormat(buffered, sourceFormat);
     } else {
-      // Fallback: estimate usage when provider didn't return any
+      // Fallback: estimate usage when provider returned no usage block
       const contentLength = JSON.stringify(
         translatedResponse?.choices?.[0]?.message?.content || ""
       ).length;
@@ -556,6 +597,7 @@ export async function handleChatCore({
       comboName,
       apiKeyId: apiKeyInfo?.id || null,
       apiKeyName: apiKeyInfo?.name || null,
+      noLog: apiKeyInfo?.noLog === true,
     }).catch(() => {});
   };
 

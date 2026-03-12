@@ -137,6 +137,7 @@ export async function refreshClineToken(refreshToken, log) {
 
 /**
  * Specialized refresh for Kimi Coding OAuth tokens.
+ * Uses custom X-Msh-* headers required by Kimi OAuth API.
  */
 export async function refreshKimiCodingToken(refreshToken, log) {
   const endpoint = PROVIDERS["kimi-coding"]?.refreshUrl || PROVIDERS["kimi-coding"]?.tokenUrl;
@@ -144,6 +145,13 @@ export async function refreshKimiCodingToken(refreshToken, log) {
     log?.warn?.("TOKEN_REFRESH", "No refresh URL configured for Kimi Coding");
     return null;
   }
+
+  // Generate device info for headers (same as OAuth flow)
+  const deviceId = "kimi-refresh-" + Date.now();
+  const platform = "omniroute";
+  const version = "2.1.2";
+  const deviceModel =
+    typeof process !== "undefined" ? `${process.platform} ${process.arch}` : "unknown";
 
   try {
     const params = new URLSearchParams({
@@ -157,6 +165,10 @@ export async function refreshKimiCodingToken(refreshToken, log) {
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         Accept: "application/json",
+        "X-Msh-Platform": platform,
+        "X-Msh-Version": version,
+        "X-Msh-Device-Model": deviceModel,
+        "X-Msh-Device-Id": deviceId,
       },
       body: params,
     });
@@ -181,6 +193,8 @@ export async function refreshKimiCodingToken(refreshToken, log) {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token || refreshToken,
       expiresIn: tokens.expires_in,
+      tokenType: tokens.token_type,
+      scope: tokens.scope,
     };
   } catch (error) {
     log?.error?.("TOKEN_REFRESH", `Network error refreshing Kimi Coding token: ${error.message}`);
@@ -866,6 +880,18 @@ const CIRCUIT_BREAKER_THRESHOLD = 5; // consecutive failures before tripping
 const CIRCUIT_BREAKER_COOLDOWN = 30 * 60 * 1000; // 30 minutes
 const REFRESH_TIMEOUT_MS = 30_000; // 30s max per refresh attempt
 
+interface CircuitBreakerStatusEntry {
+  failures: number;
+  blocked: boolean;
+  blockedUntil: string | null;
+  remainingMs: number;
+}
+
+interface RefreshLoggerLike {
+  error?: (scope: string, message: string) => void;
+  warn?: (scope: string, message: string) => void;
+}
+
 /**
  * Check if a provider is circuit-breaker blocked.
  */
@@ -881,8 +907,8 @@ export function isProviderBlocked(provider: string): boolean {
 /**
  * Get circuit breaker status for all providers (for diagnostics).
  */
-export function getCircuitBreakerStatus(): Record<string, any> {
-  const result: Record<string, any> = {};
+export function getCircuitBreakerStatus(): Record<string, CircuitBreakerStatusEntry> {
+  const result: Record<string, CircuitBreakerStatusEntry> = {};
   for (const [provider, state] of Object.entries(_circuitBreaker)) {
     result[provider] = {
       failures: state.failures,
@@ -907,7 +933,7 @@ function recordSuccess(provider: string) {
 /**
  * Record a failed refresh — increments circuit breaker counter.
  */
-function recordFailure(provider: string, log: any = null) {
+function recordFailure(provider: string, log: RefreshLoggerLike | null = null) {
   if (!_circuitBreaker[provider]) {
     _circuitBreaker[provider] = { failures: 0, blockedUntil: 0 };
   }

@@ -74,7 +74,7 @@ export class DefaultExecutor extends BaseExecutor {
 
   /**
    * For compatible providers, ensure the model name sent upstream
-   * is the clean model name without any internal routing prefix.
+   * is the clean model name without internal routing prefixes.
    * e.g. "openapi-chat-anti/claude-opus-4-6-thinking" → "claude-opus-4-6-thinking"
    */
   transformRequest(model, body, stream, credentials) {
@@ -82,7 +82,7 @@ export class DefaultExecutor extends BaseExecutor {
       this.provider?.startsWith?.("openai-compatible-") ||
       this.provider?.startsWith?.("anthropic-compatible-")
     ) {
-      const cleanModel = model.includes("/") ? model.split("/").pop() : model;
+      const cleanModel = model.includes("/") ? model.split("/").slice(1).join("/") : model;
       return { ...body, model: cleanModel };
     }
     return body;

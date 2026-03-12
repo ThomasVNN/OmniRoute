@@ -5,6 +5,29 @@ import {
   isAnthropicCompatibleProvider,
 } from "@/shared/constants/providers";
 
+type JsonRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
+}
+
+function getProviderBaseUrl(providerSpecificData: unknown): string | null {
+  const data = asRecord(providerSpecificData);
+  const baseUrl = data.baseUrl;
+  return typeof baseUrl === "string" && baseUrl.trim().length > 0 ? baseUrl : null;
+}
+
+type ProviderModelsConfigEntry = {
+  url: string;
+  method: "GET" | "POST";
+  headers: Record<string, string>;
+  authHeader?: string;
+  authPrefix?: string;
+  authQuery?: string;
+  body?: unknown;
+  parseResponse: (data: any) => any;
+};
+
 // Providers that return hardcoded models (no remote /models API)
 const STATIC_MODEL_PROVIDERS = {
   deepgram: () => [
@@ -33,7 +56,7 @@ const STATIC_MODEL_PROVIDERS = {
 };
 
 // Provider models endpoints configuration
-const PROVIDER_MODELS_CONFIG = {
+const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> = {
   claude: {
     url: "https://api.anthropic.com/v1/models",
     method: "GET",
@@ -143,6 +166,14 @@ const PROVIDER_MODELS_CONFIG = {
     authPrefix: "Bearer ",
     parseResponse: (data) => data.data || data.models || [],
   },
+  blackbox: {
+    url: "https://api.blackbox.ai/v1/models",
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    parseResponse: (data) => data.data || data.models || [],
+  },
   xai: {
     url: "https://api.x.ai/v1/models",
     method: "GET",
@@ -216,6 +247,14 @@ const PROVIDER_MODELS_CONFIG = {
     authPrefix: "Bearer ",
     parseResponse: (data) => data.data || data.models || [],
   },
+  "ollama-cloud": {
+    url: "https://api.ollama.com/v1/models",
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    parseResponse: (data) => data.models || data.data || [],
+  },
 };
 
 /**
@@ -230,8 +269,20 @@ export async function GET(request, { params }) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
-    if (isOpenAICompatibleProvider(connection.provider)) {
-      const baseUrl = connection.providerSpecificData?.baseUrl;
+    const provider =
+      typeof connection.provider === "string" && connection.provider.trim().length > 0
+        ? connection.provider
+        : null;
+    if (!provider) {
+      return NextResponse.json({ error: "Invalid connection provider" }, { status: 400 });
+    }
+
+    const connectionId = typeof connection.id === "string" ? connection.id : id;
+    const apiKey = typeof connection.apiKey === "string" ? connection.apiKey : "";
+    const accessToken = typeof connection.accessToken === "string" ? connection.accessToken : "";
+
+    if (isOpenAICompatibleProvider(provider)) {
+      const baseUrl = getProviderBaseUrl(connection.providerSpecificData);
       if (!baseUrl) {
         return NextResponse.json(
           { error: "No base URL configured for OpenAI compatible provider" },
@@ -252,13 +303,13 @@ export async function GET(request, { params }) {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${connection.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
         },
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.log(`Error fetching models from ${connection.provider}:`, errorText);
+        console.log(`Error fetching models from ${provider}:`, errorText);
         return NextResponse.json(
           { error: `Failed to fetch models: ${response.status}` },
           { status: response.status }
@@ -269,14 +320,14 @@ export async function GET(request, { params }) {
       const models = data.data || data.models || [];
 
       return NextResponse.json({
-        provider: connection.provider,
-        connectionId: connection.id,
+        provider,
+        connectionId,
         models,
       });
     }
 
-    if (isAnthropicCompatibleProvider(connection.provider)) {
-      let baseUrl = connection.providerSpecificData?.baseUrl;
+    if (isAnthropicCompatibleProvider(provider)) {
+      let baseUrl = getProviderBaseUrl(connection.providerSpecificData);
       if (!baseUrl) {
         return NextResponse.json(
           { error: "No base URL configured for Anthropic compatible provider" },
@@ -294,15 +345,15 @@ export async function GET(request, { params }) {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": connection.apiKey,
+          "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
-          Authorization: `Bearer ${connection.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
         },
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.log(`Error fetching models from ${connection.provider}:`, errorText);
+        console.log(`Error fetching models from ${provider}:`, errorText);
         return NextResponse.json(
           { error: `Failed to fetch models: ${response.status}` },
           { status: response.status }
@@ -313,34 +364,46 @@ export async function GET(request, { params }) {
       const models = data.data || data.models || [];
 
       return NextResponse.json({
-        provider: connection.provider,
-        connectionId: connection.id,
+        provider,
+        connectionId,
         models,
       });
     }
 
     // Static model providers (no remote /models API)
-    const staticModelsFn = STATIC_MODEL_PROVIDERS[connection.provider];
+    const staticModelsFn =
+      provider in STATIC_MODEL_PROVIDERS
+        ? STATIC_MODEL_PROVIDERS[provider as keyof typeof STATIC_MODEL_PROVIDERS]
+        : undefined;
     if (staticModelsFn) {
       return NextResponse.json({
-        provider: connection.provider,
-        connectionId: connection.id,
+        provider,
+        connectionId,
         models: staticModelsFn(),
       });
     }
 
-    const config = PROVIDER_MODELS_CONFIG[connection.provider];
+    const config =
+      provider in PROVIDER_MODELS_CONFIG
+        ? PROVIDER_MODELS_CONFIG[provider as keyof typeof PROVIDER_MODELS_CONFIG]
+        : undefined;
     if (!config) {
       return NextResponse.json(
-        { error: `Provider ${connection.provider} does not support models listing` },
+        { error: `Provider ${provider} does not support models listing` },
         { status: 400 }
       );
     }
 
     // Get auth token
-    const token = connection.accessToken || connection.apiKey;
+    const token = accessToken || apiKey;
     if (!token) {
-      return NextResponse.json({ error: "No valid token found" }, { status: 401 });
+      return NextResponse.json(
+        {
+          error:
+            "No API key configured for this provider. Please add an API key in the provider settings.",
+        },
+        { status: 400 }
+      );
     }
 
     // Build request URL
@@ -369,7 +432,7 @@ export async function GET(request, { params }) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.log(`Error fetching models from ${connection.provider}:`, errorText);
+      console.log(`Error fetching models from ${provider}:`, errorText);
       return NextResponse.json(
         { error: `Failed to fetch models: ${response.status}` },
         { status: response.status }
@@ -380,8 +443,8 @@ export async function GET(request, { params }) {
     const models = config.parseResponse(data);
 
     return NextResponse.json({
-      provider: connection.provider,
-      connectionId: connection.id,
+      provider,
+      connectionId,
       models,
     });
   } catch (error) {

@@ -63,7 +63,10 @@ export const IMAGE_PROVIDERS = {
     authType: "oauth",
     authHeader: "bearer",
     format: "gemini-image", // Special format: uses Gemini generateContent API
-    models: [{ id: "gemini-2.5-flash-preview-image-generation", name: "Nano Banana" }],
+    models: [
+      { id: "gemini-2.5-flash-preview-image-generation", name: "Gemini 2.5 Flash Image" },
+      { id: "gemini-3.1-flash-image-preview", name: "Gemini 3.1 Flash Image Preview" },
+    ],
     supportedSizes: ["1024x1024"],
   },
 
@@ -99,14 +102,15 @@ export const IMAGE_PROVIDERS = {
     id: "nanobanana",
     baseUrl: "https://api.nanobananaapi.ai/api/v1/nanobanana/generate",
     proUrl: "https://api.nanobananaapi.ai/api/v1/nanobanana/generate-pro",
+    statusUrl: "https://api.nanobananaapi.ai/api/v1/nanobanana/record-info",
     authType: "apikey",
     authHeader: "bearer",
-    format: "nanobanana", // custom format
+    format: "nanobanana", // custom format (async: submit task, then poll)
     models: [
       { id: "nanobanana-flash", name: "NanoBanana Flash (Gemini 2.5 Flash)" },
       { id: "nanobanana-pro", name: "NanoBanana Pro (Gemini 3 Pro)" },
     ],
-    supportedSizes: ["1024x1024"],
+    supportedSizes: ["1024x1024", "1024x1280", "1024x1536", "1536x1024", "1280x1024"],
   },
 
   sdwebui: {
@@ -157,7 +161,7 @@ export function parseImageModel(modelStr) {
     }
   }
 
-  // No provider prefix — try to find the model in any provider
+  // No provider prefix — try to find the model in every provider
   for (const [providerId, config] of Object.entries(IMAGE_PROVIDERS)) {
     if (config.models.some((m) => m.id === modelStr)) {
       return { provider: providerId, model: modelStr };

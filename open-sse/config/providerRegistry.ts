@@ -49,6 +49,21 @@ export interface RegistryEntry {
   passthroughModels?: boolean;
 }
 
+interface LegacyProvider {
+  format: string;
+  baseUrl?: string;
+  baseUrls?: string[];
+  responsesBaseUrl?: string;
+  headers?: Record<string, string>;
+  clientId?: string;
+  clientSecret?: string;
+  tokenUrl?: string;
+  refreshUrl?: string;
+  authUrl?: string;
+  chatPath?: string;
+  clientVersion?: string;
+}
+
 // ── Registry ──────────────────────────────────────────────────────────────
 
 export const REGISTRY: Record<string, RegistryEntry> = {
@@ -108,7 +123,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
       clientIdEnv: "GEMINI_OAUTH_CLIENT_ID",
       clientIdDefault: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
       clientSecretEnv: "GEMINI_OAUTH_CLIENT_SECRET",
-      clientSecretDefault: "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",
+      clientSecretDefault: "",
     },
     models: [
       { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro" },
@@ -137,7 +152,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
       clientIdEnv: "GEMINI_CLI_OAUTH_CLIENT_ID",
       clientIdDefault: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
       clientSecretEnv: "GEMINI_CLI_OAUTH_CLIENT_SECRET",
-      clientSecretDefault: "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",
+      clientSecretDefault: "",
     },
     models: [
       { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro" },
@@ -228,7 +243,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
       clientIdEnv: "IFLOW_OAUTH_CLIENT_ID",
       clientIdDefault: "10009311001",
       clientSecretEnv: "IFLOW_OAUTH_CLIENT_SECRET",
-      clientSecretDefault: "4Z3YjXycVsQvyGF1etiNlIBB4RsqSDtW",
+      clientSecretDefault: "",
       tokenUrl: "https://iflow.cn/oauth/token",
       authUrl: "https://iflow.cn/oauth",
     },
@@ -266,7 +281,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
       clientIdEnv: "ANTIGRAVITY_OAUTH_CLIENT_ID",
       clientIdDefault: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
       clientSecretEnv: "ANTIGRAVITY_OAUTH_CLIENT_SECRET",
-      clientSecretDefault: "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",
+      clientSecretDefault: "",
     },
     models: [
       { id: "claude-opus-4-6-thinking", name: "Claude Opus 4.6 Thinking" },
@@ -641,6 +656,25 @@ export const REGISTRY: Record<string, RegistryEntry> = {
     ],
   },
 
+  blackbox: {
+    id: "blackbox",
+    alias: "bb",
+    format: "openai",
+    executor: "default",
+    baseUrl: "https://api.blackbox.ai/v1/chat/completions",
+    modelsUrl: "https://api.blackbox.ai/v1/models",
+    authType: "apikey",
+    authHeader: "bearer",
+    models: [
+      { id: "gpt-4o", name: "GPT-4o" },
+      { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+      { id: "claude-sonnet-4", name: "Claude Sonnet 4" },
+      { id: "deepseek-v3", name: "DeepSeek V3" },
+      { id: "blackboxai", name: "Blackbox AI" },
+      { id: "blackboxai-pro", name: "Blackbox AI Pro" },
+    ],
+  },
+
   xai: {
     id: "xai",
     alias: "xai",
@@ -735,6 +769,29 @@ export const REGISTRY: Record<string, RegistryEntry> = {
     ],
   },
 
+  "ollama-cloud": {
+    id: "ollama-cloud",
+    alias: "ollamacloud",
+    format: "openai",
+    executor: "default",
+    baseUrl: "https://api.ollama.com/v1/chat/completions",
+    modelsUrl: "https://api.ollama.com/v1/models",
+    authType: "apikey",
+    authHeader: "bearer",
+    // Note: rate limits vary by plan (free = "Light usage", Pro = more, Max = 5x Pro).
+    // Users can generate API keys at https://ollama.com/settings/api-keys
+    models: [
+      { id: "gemma3:27b", name: "Gemma 3 27B" },
+      { id: "llama3.3:70b", name: "Llama 3.3 70B" },
+      { id: "qwen3:72b", name: "Qwen3 72B" },
+      { id: "devstral:24b", name: "Devstral 24B" },
+      { id: "deepseek-r2:671b", name: "DeepSeek R2 671B" },
+      { id: "phi4:14b", name: "Phi 4 14B" },
+      { id: "mistral-small3.2:24b", name: "Mistral Small 3.2 24B" },
+    ],
+    passthroughModels: true,
+  },
+
   cohere: {
     id: "cohere",
     alias: "cohere",
@@ -825,10 +882,10 @@ export const REGISTRY: Record<string, RegistryEntry> = {
 // ── Generator Functions ───────────────────────────────────────────────────
 
 /** Generate legacy PROVIDERS object shape for constants.js backward compatibility */
-export function generateLegacyProviders(): Record<string, any> {
-  const providers: Record<string, any> = {};
+export function generateLegacyProviders(): Record<string, LegacyProvider> {
+  const providers: Record<string, LegacyProvider> = {};
   for (const [id, entry] of Object.entries(REGISTRY)) {
-    const p: Record<string, any> = { format: entry.format };
+    const p: LegacyProvider = { format: entry.format };
 
     // URL(s)
     if (entry.baseUrls) {
@@ -898,7 +955,7 @@ export function generateAliasMap(): Record<string, string> {
 
 // ── Registry Lookup Helpers ───────────────────────────────────────────────
 
-const _byAlias = new Map();
+const _byAlias = new Map<string, RegistryEntry>();
 for (const entry of Object.values(REGISTRY)) {
   if (entry.alias && entry.alias !== entry.id) {
     _byAlias.set(entry.alias, entry);

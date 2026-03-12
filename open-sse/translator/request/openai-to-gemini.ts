@@ -1,4 +1,4 @@
-import { register } from "../index.ts";
+import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { DEFAULT_THINKING_GEMINI_SIGNATURE } from "../../config/defaultThinkingSignature.ts";
 import { ANTIGRAVITY_DEFAULT_SYSTEM } from "../../config/constants.ts";
@@ -15,13 +15,62 @@ import {
   tryParseJSON,
   generateRequestId,
   generateSessionId,
-  generateProjectId,
   cleanJSONSchemaForAntigravity,
 } from "../helpers/geminiHelper.ts";
 
+type GeminiPart = Record<string, unknown>;
+type GeminiContent = { role: string; parts: GeminiPart[] };
+
+type GeminiGenerationConfig = {
+  temperature?: unknown;
+  topP?: unknown;
+  topK?: unknown;
+  maxOutputTokens?: unknown;
+  thinkingConfig?: {
+    thinkingBudget: number;
+    include_thoughts: boolean;
+  };
+  responseMimeType?: string;
+  responseSchema?: unknown;
+};
+
+type GeminiFunctionDeclaration = {
+  name: string;
+  description: string;
+  parameters: unknown;
+};
+
+type GeminiRequest = {
+  model: string;
+  contents: GeminiContent[];
+  generationConfig: GeminiGenerationConfig;
+  safetySettings: unknown;
+  systemInstruction?: GeminiContent;
+  tools?: Array<{ functionDeclarations: GeminiFunctionDeclaration[] }>;
+};
+
+type CloudCodeEnvelope = {
+  project: string;
+  model: string;
+  userAgent: string;
+  requestId: string;
+  requestType?: string;
+  request: {
+    sessionId: string;
+    contents: GeminiContent[];
+    systemInstruction?: GeminiContent;
+    generationConfig: GeminiGenerationConfig;
+    tools?: Array<{ functionDeclarations: GeminiFunctionDeclaration[] }>;
+    safetySettings?: unknown;
+    toolConfig?: {
+      functionCallingConfig: { mode: string };
+    };
+  };
+};
+
 // Core: Convert OpenAI request to Gemini format (base for all variants)
 function openaiToGeminiBase(model, body, stream) {
-  const result: Record<string, any> = {
+  const result: GeminiRequest = {
     model: model,
     contents: [],
     generationConfig: {},
@@ -180,7 +229,9 @@ function openaiToGeminiBase(model, body, stream) {
         functionDeclarations.push({
           name: t.name,
           description: t.description || "",
-          parameters: t.input_schema || { type: "object", properties: {} },
+          parameters: cleanJSONSchemaForAntigravity(
+            t.input_schema || { type: "object", properties: {} }
+          ),
         });
       }
       // OpenAI format
@@ -189,7 +240,9 @@ function openaiToGeminiBase(model, body, stream) {
         functionDeclarations.push({
           name: fn.name,
           description: fn.description || "",
-          parameters: fn.parameters || { type: "object", properties: {} },
+          parameters: cleanJSONSchemaForAntigravity(
+            fn.parameters || { type: "object", properties: {} }
+          ),
         });
       }
     }
@@ -206,9 +259,7 @@ function openaiToGeminiBase(model, body, stream) {
       // Extract the schema (may be nested under .schema key)
       const schema = body.response_format.json_schema.schema || body.response_format.json_schema;
       if (schema && typeof schema === "object") {
-        // Remove unsupported keywords for Gemini (it uses a subset of JSON Schema)
-        const { $schema, additionalProperties, ...cleanSchema } = schema;
-        result.generationConfig.responseSchema = cleanSchema;
+        result.generationConfig.responseSchema = cleanJSONSchemaForAntigravity(schema);
       }
     } else if (body.response_format.type === "json_object") {
       result.generationConfig.responseMimeType = "application/json";
@@ -269,11 +320,17 @@ export function openaiToGeminiCLIRequest(model, body, stream) {
 
 // Wrap Gemini CLI format in Cloud Code wrapper
 function wrapInCloudCodeEnvelope(model, geminiCLI, credentials = null, isAntigravity = false) {
-  const projectId = credentials?.projectId || generateProjectId();
+  const projectId = credentials?.projectId;
+
+  if (!projectId) {
+    throw new Error(
+      `${isAntigravity ? "Antigravity" : "GeminiCLI"} account is missing projectId. Reconnect OAuth to load your real Cloud Code project before sending requests.`
+    );
+  }
 
   const cleanModel = model.includes("/") ? model.split("/").pop()! : model;
 
-  const envelope: Record<string, any> = {
+  const envelope: CloudCodeEnvelope = {
     project: projectId,
     model: cleanModel,
     userAgent: isAntigravity ? "antigravity" : "gemini-cli",
@@ -292,7 +349,7 @@ function wrapInCloudCodeEnvelope(model, geminiCLI, credentials = null, isAntigra
     envelope.requestType = "agent";
 
     // Inject required default system prompt for Antigravity
-    const defaultPart: Record<string, any> = { text: ANTIGRAVITY_DEFAULT_SYSTEM };
+    const defaultPart: GeminiPart = { text: ANTIGRAVITY_DEFAULT_SYSTEM };
     if (envelope.request.systemInstruction?.parts) {
       envelope.request.systemInstruction.parts.unshift(defaultPart);
     } else {
@@ -313,13 +370,18 @@ function wrapInCloudCodeEnvelope(model, geminiCLI, credentials = null, isAntigra
   return envelope;
 }
 
-// Wrap Claude format in Cloud Code envelope for Antigravity
 function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = null) {
-  const projectId = credentials?.projectId || generateProjectId();
+  const projectId = credentials?.projectId;
+
+  if (!projectId) {
+    throw new Error(
+      "Antigravity/Claude account is missing projectId. Reconnect OAuth to load your real Cloud Code project before sending requests."
+    );
+  }
 
   const cleanModel = model.includes("/") ? model.split("/").pop()! : model;
 
-  const envelope: Record<string, any> = {
+  const envelope: CloudCodeEnvelope = {
     project: projectId,
     model: cleanModel,
     userAgent: "antigravity",

@@ -10,6 +10,10 @@ import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import * as log from "@/sse/utils/logger";
 import { toJsonErrorPayload } from "@/shared/utils/upstreamError";
 import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
+import { v1EmbeddingsSchema } from "@/shared/validation/schemas";
+import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
+
+import { getAllCustomModels } from "@/lib/localDb";
 
 /**
  * Handle CORS preflight
@@ -28,36 +32,62 @@ export async function OPTIONS() {
  * GET /v1/embeddings — list available embedding models
  */
 export async function GET() {
-  const models = getAllEmbeddingModels();
-  return new Response(
-    JSON.stringify({
-      object: "list",
-      data: models.map((m) => ({
-        id: m.id,
-        object: "model",
-        created: Math.floor(Date.now() / 1000),
-        owned_by: m.provider,
-        type: "embedding",
-        dimensions: m.dimensions,
-      })),
-    }),
-    {
-      headers: { "Content-Type": "application/json" },
+  const builtInModels = getAllEmbeddingModels();
+  const timestamp = Math.floor(Date.now() / 1000);
+
+  const data = builtInModels.map((m) => ({
+    id: m.id,
+    object: "model",
+    created: timestamp,
+    owned_by: m.provider,
+    type: "embedding",
+    dimensions: m.dimensions,
+  }));
+
+  // Include custom models tagged for embeddings
+  try {
+    const customModelsMap = (await getAllCustomModels()) as Record<string, any>;
+    for (const [providerId, models] of Object.entries(customModelsMap)) {
+      if (!Array.isArray(models)) continue;
+      for (const model of models) {
+        if (!model?.id || !Array.isArray(model.supportedEndpoints)) continue;
+        if (!model.supportedEndpoints.includes("embeddings")) continue;
+        const fullId = `${providerId}/${model.id}`;
+        if (data.some((d) => d.id === fullId)) continue;
+        data.push({
+          id: fullId,
+          object: "model",
+          created: timestamp,
+          owned_by: providerId,
+          type: "embedding",
+          dimensions: null,
+        });
+      }
     }
-  );
+  } catch {}
+
+  return new Response(JSON.stringify({ object: "list", data }), {
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 /**
  * POST /v1/embeddings — create embeddings
  */
 export async function POST(request) {
-  let body;
+  let rawBody;
   try {
-    body = await request.json();
+    rawBody = await request.json();
   } catch {
     log.warn("EMBED", "Invalid JSON body");
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body");
   }
+
+  const validation = validateBody(v1EmbeddingsSchema, rawBody);
+  if (isValidationFailure(validation)) {
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, validation.error.message);
+  }
+  const body = validation.data;
 
   // Optional API key validation
   if (process.env.REQUIRE_API_KEY === "true") {
@@ -69,14 +99,6 @@ export async function POST(request) {
     if (!valid) {
       return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
     }
-  }
-
-  if (!body.model) {
-    return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
-  }
-
-  if (!body.input) {
-    return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing input");
   }
 
   // Enforce API key policies (model restrictions + budget limits)

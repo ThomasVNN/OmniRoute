@@ -5,7 +5,7 @@ import { PROVIDERS, OAUTH_ENDPOINTS, HTTP_STATUS } from "../config/constants.ts"
 const MAX_RETRY_AFTER_MS = 10000;
 
 /**
- * Strip any provider prefix (e.g. "antigravity/model" → "model").
+ * Strip provider prefixes (e.g. "antigravity/model" → "model").
  * Ensures the model name sent to the upstream API never contains a routing prefix.
  */
 function cleanModelName(model: string): string {
@@ -36,7 +36,21 @@ export class AntigravityExecutor extends BaseExecutor {
   }
 
   transformRequest(model, body, stream, credentials) {
-    const projectId = credentials?.projectId || this.generateProjectId();
+    const bodyProjectId = body?.project;
+    const credentialsProjectId = credentials?.projectId;
+    const allowBodyProjectOverride = process.env.OMNIROUTE_ALLOW_BODY_PROJECT_OVERRIDE === "1";
+
+    // Default: prefer OAuth-stored projectId over incoming body.project to avoid
+    // stale/wrong client-side values causing 404/403 from Cloud Code endpoints.
+    // Opt-in escape hatch: set OMNIROUTE_ALLOW_BODY_PROJECT_OVERRIDE=1.
+    const projectId =
+      allowBodyProjectOverride && bodyProjectId ? bodyProjectId : credentialsProjectId || bodyProjectId;
+
+    if (!projectId) {
+      throw new Error(
+        "Missing Google projectId for Antigravity account. Please reconnect OAuth so OmniRoute can fetch your real Cloud Code project (loadCodeAssist)."
+      );
+    }
 
     // Fix contents for Claude models via Antigravity
     const normalizedContents =
@@ -115,12 +129,6 @@ export class AntigravityExecutor extends BaseExecutor {
       log?.error?.("TOKEN", `Antigravity refresh error: ${error.message}`);
       return null;
     }
-  }
-
-  generateProjectId() {
-    const adj = ["useful", "bright", "swift", "calm", "bold"][Math.floor(Math.random() * 5)];
-    const noun = ["fuze", "wave", "spark", "flow", "core"][Math.floor(Math.random() * 5)];
-    return `${adj}-${noun}-${crypto.randomUUID().slice(0, 5)}`;
   }
 
   generateSessionId() {

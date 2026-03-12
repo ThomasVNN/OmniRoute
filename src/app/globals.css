@@ -6,6 +6,9 @@
    directives ensure all utility classes in route groups are included. */
 @source "../app/(dashboard)";
 @source "../../open-sse";
+@source not "../../*.sqlite*";
+@source not "../../.claude*";
+@source not "../../.claude-memory";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -141,9 +144,10 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Selection */
+/* Selection — with fallback for browsers that don't support color-mix() */
 ::selection {
-  background-color: rgba(229, 77, 94, 0.2);
+  background-color: rgba(229, 77, 94, 0.22);
+  background-color: color-mix(in srgb, var(--color-primary) 22%, transparent);
   color: var(--color-primary);
 }
 
