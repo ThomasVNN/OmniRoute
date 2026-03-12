@@ -114,3 +114,8 @@ electron/package-lock.json
 electron/dist-electron/
 electron/node_modules/
 icon.iconset/
+/.vscode/
+/.github/
+/.husky/
+/.agents/
+/.idea/
